@@ -3,6 +3,8 @@ using Asp.Versioning.ApiExplorer;
 using CityInfo.API;
 using CityInfo.API.DbContexts;
 using CityInfo.API.Services;
+using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.StaticFiles;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -12,16 +14,39 @@ using System.Reflection;
 using System.Text;
 
 
-Log.Logger = new LoggerConfiguration()
-    .MinimumLevel.Debug()
-    .WriteTo.Console()
-    .WriteTo.File("logs/cityinfo.txt", rollingInterval: RollingInterval.Day)
-    .CreateLogger();
+//Log.Logger = new LoggerConfiguration()
+//    .MinimumLevel.Debug()
+//    .WriteTo.Console()
+//    .WriteTo.File("logs/cityinfo.txt", rollingInterval: RollingInterval.Day)
+//    .CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
 //builder.Logging.ClearProviders();
 //builder.Logging.AddConsole();
-builder.Host.UseSerilog();
+
+var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+
+if (environment == Environments.Development)
+{
+    builder.Host.UseSerilog((context, loggerConfiguration) => loggerConfiguration
+    .MinimumLevel.Debug()
+    .WriteTo.Console());
+}
+else
+{
+    builder.Host.UseSerilog((context, loggerConfiguration) => loggerConfiguration
+    .MinimumLevel.Debug()
+    .WriteTo.Console()
+    .WriteTo.File("logs/cityinfo.txt", rollingInterval: RollingInterval.Day)
+    .WriteTo.ApplicationInsights(
+        new TelemetryConfiguration()
+        {
+            InstrumentationKey = builder.Configuration["ApplicationInsightsInstrumentationKey"]
+        },
+        TelemetryConverter.Traces));
+}
+
+
 
 // Add services to the container.
 
@@ -66,7 +91,7 @@ builder.Services.AddAuthentication("Bearer")
             ValidIssuer = builder.Configuration["Authentication:Issuer"],
             ValidAudience = builder.Configuration["Authentication:Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(
-                Encoding.ASCII.GetBytes(builder.Configuration["Authentication:SecretForKey"]))
+                Convert.FromBase64String(builder.Configuration["Authentication:SecretForKey"]))
         };
     }
     );
@@ -141,18 +166,25 @@ builder.Services.AddTransient<IMailService, CloudMailService>();
 
 builder.Services.AddSingleton<CitiesDataStore>();
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+});
+
 var app = builder.Build();
 
 
 
 // Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
-{
+{  
     app.UseExceptionHandler();
 }
 
-if (app.Environment.IsDevelopment())
-{
+app.UseForwardedHeaders();
+
+//if (app.Environment.IsDevelopment())
+//{
     app.UseSwagger();
     app.UseSwaggerUI(setupAction =>
     {
@@ -164,7 +196,7 @@ if (app.Environment.IsDevelopment())
                 description.GroupName.ToUpperInvariant());
         }
     });
-}
+//}
 
 app.UseHttpsRedirection();
 
